@@ -7,13 +7,13 @@ import sys
 from std_srvs.srv import SetBool, Trigger
 from naoqi_utilities_msgs.srv import (
     GoToPosture, SetStiffnesses, SetOpenCloseHand, SetBreathing,
-    SetSecurityDistance, SetMoveArmsEnabled
+    SetSecurityDistance, SetMoveArmsEnabled, PlayAnimation
 )
 
 class NaoqiManipulationNode(Node):
     """
     ROS2 Node to manage manipulation functionalities of a NAO robot,
-    specifically ALMotion and ALRobotPosture.
+    specifically ALMotion, ALRobotPosture, and ALBehaviorManager.
     """
     def __init__(self, session):
         """
@@ -21,12 +21,13 @@ class NaoqiManipulationNode(Node):
         """
         super().__init__('naoqi_manipulation_node')
         self.get_logger().info("Initializing NaoqiManipulationNode...")
-        self.posture = "Stand" # Assume robot starts in Stand posture
+        self.posture = "stand" # Assume robot starts in Stand posture
 
         # --- NAOqi Service Clients ---
         try:
             self.al_motion = session.service("ALMotion")
             self.al_robot_posture = session.service("ALRobotPosture")
+            self.al_behavior_manager = session.service("ALBehaviorManager")
             self.get_logger().info("NAOqi service clients obtained successfully.")
         except Exception as e:
             self.get_logger().error(f"Could not connect to NAOqi services: {e}")
@@ -86,6 +87,13 @@ class NaoqiManipulationNode(Node):
             GoToPosture,
             '~/go_to_posture',
             self.go_to_posture_callback
+        )
+
+        # --- ROS2 Services for ALBehaviorManager ---
+        self.play_animation_service = self.create_service(
+            PlayAnimation,
+            '~/play_animation',
+            self.play_animation_callback
         )
 
         self.get_logger().info("Manipulation functionalities node is ready.")
@@ -174,10 +182,15 @@ class NaoqiManipulationNode(Node):
                 
                 if current_posture == "stand":
                     self.al_motion.setBreathEnabled(joint_group, True)
-                elif current_posture in ["sit", "sitrelax"]:
+                elif current_posture in ["sit", "sit-relax", "lying-back", "lying-front"]:
                     # If the robot is sitting, let him move his upper body, but not his legs
-                    if joint_group.lower() not in ["body", "legs"]:
+                    if joint_group.lower() not in ["body", "legs", "all"]:
                         self.al_motion.setBreathEnabled(joint_group, True)
+                    else:
+                        self.get_logger().info(f"Breathing for {joint_group} not enabled in {current_posture} posture.")
+                        response.success = False
+                        response.message = f"Breathing for {joint_group} not enabled in {current_posture} posture."
+                        return response
                 # If posture is "rest", do nothing as per the original logic
             else: # disable
                 self.al_motion.setBreathEnabled(request.joint_group, False)
@@ -289,8 +302,12 @@ class NaoqiManipulationNode(Node):
                 self.al_motion.rest()
             elif posture_name == "sit":
                 self.al_robot_posture.goToPosture("Sit", 0.5)
-            elif posture_name == "sitrelax":
+            elif posture_name == "sit-relax":
                 self.al_robot_posture.goToPosture("SitRelax", 0.5)
+            elif posture_name == "lying-back":
+                self.al_robot_posture.goToPosture("LyingBack", 0.5)
+            elif posture_name == "lying-front":
+                self.al_robot_posture.goToPosture("LyingBelly", 0.5)
             else:
                 response.success = False
                 response.message = f"Unknown posture '{posture_name}'."
@@ -306,6 +323,36 @@ class NaoqiManipulationNode(Node):
             response.success = False
             response.message = f"Error going to posture: {e}"
             self.get_logger().error(response.message)
+        return response
+
+    def play_animation_callback(self, request, response):
+        """
+        Callback to run a predefined animation (behavior) from the 'animations' family.
+        """
+        try:
+            animation = request.animation_name
+            self.get_logger().info(f"Request to play animation '{animation}'.")
+
+            full_behavior_name = f"animations/{animation}"
+
+            installed_behaviors = self.al_behavior_manager.getInstalledBehaviors()
+
+            if full_behavior_name in installed_behaviors:
+                # startBehavior is non-blocking
+                self.al_behavior_manager.startBehavior(full_behavior_name)
+                response.success = True
+                response.message = f"Animation '{full_behavior_name}' started successfully."
+                self.get_logger().info(response.message)
+            else:
+                response.success = False
+                response.message = f"Animation '{full_behavior_name}' does not exist on the robot."
+                self.get_logger().error(response.message)
+
+        except Exception as e:
+            response.success = False
+            response.message = f"Error playing animation: {e}"
+            self.get_logger().error(response.message)
+        
         return response
 
 def main(args=None):
