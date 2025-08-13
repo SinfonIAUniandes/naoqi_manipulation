@@ -22,6 +22,8 @@ class NaoqiManipulationNode(Node):
         super().__init__('naoqi_manipulation_node')
         self.get_logger().info("Initializing NaoqiManipulationNode...")
         self.posture = "stand" # Assume robot starts in Stand posture
+        self.tangential_security_state = True
+        self.orthogonal_security_state = True
 
         # --- NAOqi Session Management ---
         self.session = self._create_qi_session(ip, port)
@@ -232,6 +234,15 @@ class NaoqiManipulationNode(Node):
         try:
             self.get_logger().info(f"Request to set tangential security distance to {request.distance}m.")
             self.al_motion.setTangentialSecurityDistance(request.distance)
+            if request.distance < 0.1:
+                self.tangential_security_state = False
+            else:
+                self.tangential_security_state = True
+            
+            # If both security distances are set to low values, disable external collision protection
+            if not (self.tangential_security_state and self.orthogonal_security_state):
+                self.al_motion.setExternalCollisionProtectionEnabled("All", False)
+                self.get_logger().info("External collision protection disabled due to security distance settings.")
             response.success = True
             response.message = "Tangential security distance updated."
         except Exception as e:
@@ -247,6 +258,15 @@ class NaoqiManipulationNode(Node):
         try:
             self.get_logger().info(f"Request to set orthogonal security distance to {request.distance}m.")
             self.al_motion.setOrthogonalSecurityDistance(request.distance)
+            if request.distance < 0.4:
+                self.orthogonal_security_state = False
+            else:
+                self.orthogonal_security_state = True
+
+            # If both security distances are set to low values, disable external collision protection
+            if not (self.tangential_security_state and self.orthogonal_security_state):
+                self.al_motion.setExternalCollisionProtectionEnabled("All", False)
+                self.get_logger().info("External collision protection disabled due to security distance settings.")
             response.success = True
             response.message = "Orthogonal security distance updated."
         except Exception as e:
