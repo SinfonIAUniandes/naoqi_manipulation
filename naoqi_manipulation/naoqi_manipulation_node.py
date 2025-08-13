@@ -15,7 +15,7 @@ class NaoqiManipulationNode(Node):
     ROS2 Node to manage manipulation functionalities of a NAO robot,
     specifically ALMotion, ALRobotPosture, and ALBehaviorManager.
     """
-    def __init__(self, session):
+    def __init__(self, ip, port):
         """
         Initializes the node, NAOqi service clients, and ROS2 services.
         """
@@ -23,14 +23,21 @@ class NaoqiManipulationNode(Node):
         self.get_logger().info("Initializing NaoqiManipulationNode...")
         self.posture = "stand" # Assume robot starts in Stand posture
 
+        # --- NAOqi Session Management ---
+        self.session = self._create_qi_session(ip, port)
+        if self.session is None:
+            # Error is already logged in the helper function
+            sys.exit(1)
+
         # --- NAOqi Service Clients ---
         try:
-            self.al_motion = session.service("ALMotion")
-            self.al_robot_posture = session.service("ALRobotPosture")
-            self.al_behavior_manager = session.service("ALBehaviorManager")
+            self.al_motion = self.session.service("ALMotion")
+            self.al_robot_posture = self.session.service("ALRobotPosture")
+            self.al_behavior_manager = self.session.service("ALBehaviorManager")
             self.get_logger().info("NAOqi service clients obtained successfully.")
         except Exception as e:
             self.get_logger().error(f"Could not connect to NAOqi services: {e}")
+            self.destroy_node()
             sys.exit(1)
 
         # --- ROS2 Services for ALMotion ---
@@ -355,6 +362,27 @@ class NaoqiManipulationNode(Node):
         
         return response
 
+    def _create_qi_session(self, ip, port):
+        """Helper function to create and connect a qi session."""
+        session = qi.Session()
+        try:
+            self.get_logger().info(f"Attempting to connect to NAOqi at tcp://{ip}:{port}")
+            session.connect(f"tcp://{ip}:{port}")
+            self.get_logger().info("Successfully connected to NAOqi.")
+            return session
+        except RuntimeError as e:
+            self.get_logger().error(f"Can't connect to Naoqi at ip '{ip}' on port {port}.\n"
+                                    f"Error: {e}\nPlease check your script arguments.")
+            return None
+
+    def destroy_node(self):
+        """Custom destroy function to clean up session."""
+        self.get_logger().info("Closing NAOqi session.")
+        if self.session and self.session.isConnected():
+            self.session.close()
+        super().destroy_node()
+
+
 def main(args=None):
     rclpy.init(args=args)
 
@@ -365,22 +393,14 @@ def main(args=None):
                         help="Naoqi port number")
     parsed_args, _ = parser.parse_known_args(args=sys.argv[1:])
 
-    session = qi.Session()
-    try:
-        session.connect(f"tcp://{parsed_args.ip}:{parsed_args.port}")
-    except RuntimeError:
-        print(f"Can't connect to Naoqi at ip \"{parsed_args.ip}\" on port {parsed_args.port}.\n"
-              "Please check your script arguments. Run with -h option for help.")
-        sys.exit(1)
-
-    naoqi_manipulation_node = NaoqiManipulationNode(session)
+    naoqi_manipulation_node = NaoqiManipulationNode(ip=parsed_args.ip, port=parsed_args.port)
 
     try:
         rclpy.spin(naoqi_manipulation_node)
     except KeyboardInterrupt:
         print("Closing the manipulation functionalities node.")
     finally:
-        naoqi_manipulation_node.destroy_node()
+        # The destroy_node method will be called automatically on shutdown
         rclpy.shutdown()
 
 if __name__ == '__main__':
